@@ -61,6 +61,7 @@ def rand_article_path(wiki_special_rand_path=wiki_article_path + 'Special:Random
     return url.path
 
 
+
 def last_modified_on(origin, elem_id='footer-info-lastmod', parsing_format=' This page was last modified on %d %B %Y, at %H:%M.'):
     """ Returns the datetime object representing the last time the article was modified,
             upon failure it tries the header, if that fails, it returns None
@@ -99,7 +100,7 @@ def last_modified_on(origin, elem_id='footer-info-lastmod', parsing_format=' Thi
         logging.warning('Unable to determine wiki article url: {} last modified date time.'.format(origin.base_url))
 
 # Bad: http://en.wikipedia.org/wiki/Human
-def iter_text_links_path(origin, elem_id='mw-content-text'): # TODO: deal with red links.
+def iter_text_links_path(origin, elem_id='mw-content-text', from_url=None): # TODO: deal with red links.
     """ Gets all the text links from an html node,
         according to http://en.wikipedia.org/wiki/Wikipedia:Getting_to_Philosophy
             taken only those links that are non-parenthesized, non-italicized
@@ -113,6 +114,8 @@ def iter_text_links_path(origin, elem_id='mw-content-text'): # TODO: deal with r
     /wiki/Hominini
     >>> print next(iter_text_links_path(lxml.html.parse('http://en.wikipedia.org/wiki/Mississippi').getroot()))
     /wiki/U.S._state
+    >>> print next(iter_text_links_path(lxml.html.parse('http://en.wikipedia.org/wiki/Al-Ahram_Center_for_Political_and_Strategic_Studies').getroot()))
+    /wiki/Zionism
     """
     current_path = urlparse.urlparse(origin.base_url).path
     for p in origin.get_element_by_id(elem_id).iterfind('p'):
@@ -134,9 +137,9 @@ def iter_text_links_path(origin, elem_id='mw-content-text'): # TODO: deal with r
                 url = urlparse.urlparse(link)
                 netloc = url.netloc or wiki_hostname
                 path = url.path or current_path
-                if netloc != wiki_hostname or path == current_path: # Ignore External links/self referencing Links
-                    continue
-                yield link
+                if not (netloc != wiki_hostname or path == current_path or 'redlink=1' in url.query):
+                    # Ignore External links/self referencing/redlinks Links
+                    yield link
 
 Article = collections.namedtuple('Article', ('first_link', 'url_tail', 'modified_on'))
 
@@ -259,6 +262,7 @@ def running_average(average=0, counts=None):
     for seen in counts:
         average = ((yield average) + (seen * average))/float(seen + 1)
 
+philosophy_routes_count = 0
 
 @started_coroutine
 def average_route_length(seen=None, target='Philosophy', current_avg=None):
@@ -277,22 +281,20 @@ def average_route_length(seen=None, target='Philosophy', current_avg=None):
     target_reached = lambda seq: next(reversed(seq), default) == target
     calc_average = current_avg or running_average()
     avg = None
+    global philosophy_routes_count
     while True:
         route = (yield avg)
         first_node = next(iter(route), default)
         if first_node is not default and first_node not in seen and target_reached(route): # TODO: deal with modified routes!
             seen.add(first_node)
             avg = calc_average.send(len(route) - 1) # exclude starting point.
-            # for length, node in enumerate(reversed(route)): # <<< This counts all the unique sub-paths as well.
-            #     if node not in seen:
-            #         avg = calc_average.send(length)
-            #         seen.add(node)
+            philosophy_routes_count += 1
 
 current_average = None
 count = 0
 
 def calc_average():
-    global current_average, count
+    global current_average, count  # TODO, use safer method than global variables.
     chunks = 1
     routes = itertools.imap(find_philosophy_route, itertools.imap(apply, itertools.repeat(rand_article_path)))
     chunks = itertools.starmap(itertools.islice, itertools.repeat((routes, None, chunks)))
@@ -305,7 +307,8 @@ def calc_average():
 
 @bottle.route('/')
 def get_stats():
-    return {'philosophy': {'average': current_average, 'seen': count}}
+    return {'routes': {'seen': count},
+            'philosophy': {'average_length': current_average, 'count': philosophy_routes_count}}
 
 
 def start():
