@@ -1,9 +1,8 @@
+#! /usr/bin/env python
 __author__ = 'samyvilar'
 
-# Calculate the average number of clicks from a random articles to philosophy.
-
-import sys
 import os
+import argparse
 import functools
 import itertools
 import collections
@@ -315,7 +314,7 @@ def gather_stats(stats=stats):
     percentages = {
         'philosophy': percentage('Philosophy', distribution['philosophy'], make_count()),
         'dead_end': percentage(None, distribution['dead_end'], make_count()),
-        'exception': percentage(expception_type, distribution['errors'], make_count()),
+        'errors': percentage(expception_type, distribution['errors'], make_count()),
         'cycled': percentage(cycled_type, distribution['cycled'], make_count())
     }
     for route in itertools.ifilter(bool, rand_routes):
@@ -330,18 +329,33 @@ def gather_stats(stats=stats):
 def get_stats():
     return stats
 
+
 saved_stats_file = 'analytics.json'
 @atexit.register # <<<< At exit save stats ...
 def save_stats():
     json.dump(stats, open(saved_stats_file, 'w'))
 
-def start():
+def start(host='localhost', port=8080, stats=stats):
     thread = threading.Thread(target=gather_stats, args=(stats,))
     thread.daemon = True # <<< TODO: decide whether or not we should do any house keeping before pulling the plug.
     thread.start()
-    bottle.run(host='localhost', port=8080)
+    bottle.run(host=host, port=port)
+
+def config_server():
+    global stats, saved_stats_file
+    parser = argparse.ArgumentParser(description='Wiki Getting to Philosophy Stats.')
+    parser.add_argument('--host', type=str, nargs='?', default='localhost',
+                   help='host name or address to listen to defaults to localhost')
+    parser.add_argument('--port', type=int, nargs='?', default=8080,
+                        help='port address to listen for, defaults to 8080')
+    parser.add_argument('--stats', type=str, nargs='?', default=saved_stats_file,
+                      help='stats json file path to work with will load the stats if present, and dump the stats on exit')
+
+    args = parser.parse_args()
+    saved_stats_file = args.stats
+    if os.path.isfile(saved_stats_file):
+        stats = json.load(open(saved_stats_file)) # TODO: use a safer method!
+    start(args.host, args.port, stats)
 
 if __name__ == '__main__':
-    if os.path.isfile(saved_stats_file):
-        stats = json.load(open(saved_stats_file))
-    start()
+    config_server()
