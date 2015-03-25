@@ -8,8 +8,15 @@ and the distribution (as percentage) of each explored path.
 
 NOTE: it doesn't keep track of seen paths, it is possible that the same path may be explored twice.
 
+requires, lxml for parsing and
+          bottle to serve the actual objects.
 
-requires, lxml for parsing and bottle to serve the actual stats
+The server is singlethreaded, with a single background thread collecting stats.
 
-start the server: ./wiki_analytics.py --host
+usage:
+    $ ./wiki_analytics.py --help # print usage
+
+    $ ./wiki_analytics.py &  # <<<< runs the server in the background.
+    $ curl localhost:8080 # get current stats as a json object.
+    $ kill `pgrep -f wiki_analytics.py` # Kills background server insta
 
