@@ -1,23 +1,22 @@
 Wiki Stats
 
-Simple application that tracks statistics on paths 
-from random wiki articles that either 
-terminate at philosophy/dead end or cycle
+Simple application that tracks statistics on the articles
+traversed from random wiki article to philosophy
 
 see: @http://en.wikipedia.org/wiki/Wikipedia:Getting_to_Philosophy
 
 Currently:
-- counts the type of paths (philosophy, dead end, cycled)
-- average length of all those that lead to philosophy
-and the distribution (as percentage) of each explored path.
+- average number of hops to philosophy
+- distribution (as percentage) of the different kind of routes.
+(philosophy, cycled, dead end [no links] present, exception bad link)
 
-NOTE: it doesn't keep track of seen paths, 
-it is possible that the same path may be explored twice.
+NOTE: it doesn't keep track of seen routes, 
+it is possible that the same sequence may be counted twice.
 
 requires, lxml for parsing and
           bottle to serve the actual objects.
 
-The server is singlethreaded, with a single background thread collecting stats.
+The server has a single background thread collecting stats.
 
 usage:
     $ ./wiki_analytics.py --help # print usage
