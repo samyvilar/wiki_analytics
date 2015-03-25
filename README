@@ -1,12 +1,18 @@
 Wiki Stats
 
-Simple application that tracks random paths the either lead to philosophy/dead end/ or cycle
-Starting from a random wiki article see: @http://en.wikipedia.org/wiki/Wikipedia:Getting_to_Philosophy
+Simple application that tracks statistics on paths 
+from random wiki articles that either 
+terminate at philosophy/dead end or cycle
 
-Currently simply counts the paths, average length of all those that lead to philosophy
+see: @http://en.wikipedia.org/wiki/Wikipedia:Getting_to_Philosophy
+
+Currently:
+- counts the type of paths (philosophy, dead end, cycled)
+- average length of all those that lead to philosophy
 and the distribution (as percentage) of each explored path.
 
-NOTE: it doesn't keep track of seen paths, it is possible that the same path may be explored twice.
+NOTE: it doesn't keep track of seen paths, 
+it is possible that the same path may be explored twice.
 
 requires, lxml for parsing and
           bottle to serve the actual objects.
