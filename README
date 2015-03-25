@@ -27,5 +27,7 @@ usage:
     $ curl localhost:8080 # get current stats as a json object.
 
     $ [ctrl-c] # save stats kill server 
-    $ kill `pgrep -f wiki_analytics.py` # <<<< unsafe!! May raise segfault due to to lxml c code and would probably not save stats
+    $ kill `pgrep -f wiki_analytics.py` 
+    # ^^^^^^^^ UNSAFE!! May raise segfault due to to lxml c code 
+    # and would probably not save stats
 
