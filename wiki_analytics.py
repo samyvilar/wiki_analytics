@@ -3,6 +3,7 @@ __author__ = 'samyvilar'
 # Calculate the average number of clicks from a random articles to philosophy.
 
 import sys
+import os
 import functools
 import itertools
 import collections
@@ -13,6 +14,9 @@ import Queue
 import logging
 import datetime
 import threading
+import time
+import json
+import atexit
 
 import lxml.html as html
 import bottle
@@ -32,18 +36,19 @@ def article_url_tail(url):
     return path[len(wiki_article_path):]
 
 conn_pool_size = 10
-conn_pool = Queue.Queue(conn_pool_size)
+conn_pool = Queue.Queue(conn_pool_size)  # To be used when multi-threading supported is added
 
-def get_or_make_conn(timeout=None): # Get or Make an http connection
-    if timeout is not None:
-        return httplib.HTTPConnection(wiki_hostname, wiki_port, timeout=timeout)
+def get_or_make_conn(timeout=None, make=functools.partial(httplib.HTTPConnection, wiki_hostname, wiki_port)):
+    # Get or Make an http connection
+    if timeout is not None:  # If default is giving then we cant used conns from pool
+        return make(timeout=timeout)
     try:
         return conn_pool.get_nowait()
     except Queue.Empty:
-        return httplib.HTTPConnection(wiki_hostname, wiki_port)
+        return make()
 
 
-def recycle_conn(conn):
+def recycle_conn(conn): # To be used when multi-threading support is added
     try:
         conn_pool.put_nowait(conn)
     except Queue.Full:
@@ -59,7 +64,6 @@ def rand_article_path(wiki_special_rand_path=wiki_article_path + 'Special:Random
     recycle_conn(conn)
     url = urlparse.urlparse(location)
     return url.path
-
 
 
 def last_modified_on(origin, elem_id='footer-info-lastmod', parsing_format=' This page was last modified on %d %B %Y, at %H:%M.'):
@@ -99,7 +103,6 @@ def last_modified_on(origin, elem_id='footer-info-lastmod', parsing_format=' Thi
     else:
         logging.warning('Unable to determine wiki article url: {} last modified date time.'.format(origin.base_url))
 
-# Bad: http://en.wikipedia.org/wiki/Human
 def iter_text_links_path(origin, elem_id='mw-content-text', from_url=None): # TODO: deal with red links.
     """ Gets all the text links from an html node,
         according to http://en.wikipedia.org/wiki/Wikipedia:Getting_to_Philosophy
@@ -158,10 +161,10 @@ def cached(callable=None, cache=None, key=lambda *args, **kwargs: args and args[
 class NotFoundException(httplib.HTTPException):
     pass
 
-@cached
-def article(source=None, wiki_site='{scheme}://{host}'.format(scheme=wiki_scheme, host=wiki_hostname)):
-    """ Gets an article object DOES NOT FOLLOW REDIRECTS, if giving a path to a 404,
-        raises NotFoundException
+# @cached
+def article(source=None, wiki_site='{scheme}://{host}'.format(scheme=wiki_scheme, host=wiki_hostname), follow_redirects=True):
+    """ Gets an article if giving a path to a 404,
+        raises NotFoundException, otherwise http exception
     :param path: (either complete (url or just the path) to the article
     :return: Article object
     >>> print article('/wiki/Human').first_link
@@ -188,6 +191,12 @@ def article(source=None, wiki_site='{scheme}://{host}'.format(scheme=wiki_scheme
     conn.request('HEAD', source) # Get a HEAD request first, to test its status code, (404s return ~25KB)
     resp = conn.getresponse()    # but it does mean using up a connection and waiting on IO
     resp.read()
+    if follow_redirects:
+        while 300 < resp.status < 310:
+            source = resp.getheader('location')
+            conn.request('HEAD', source)
+            resp = conn.getresponse()
+            resp.read()
     if resp.status != 200:
         recycle_conn(conn)
         raise NotFoundException('Article Not Found path: {}'.format(source)) if resp.status == 404 else \
@@ -200,7 +209,7 @@ def article(source=None, wiki_site='{scheme}://{host}'.format(scheme=wiki_scheme
     recycle_conn(conn)
     return Article(next(iter_text_links_path(root), None), article_url_tail(source), last_modified_on(root))
 
-@cached(key=lambda start, target=article('/wiki/Philosophy'), history=None: (start, target))
+# @cached  # disable for now since articles updates are causing havocs ...
 def find_philosophy_route(start, history=None):
     """ Finds a route from start (by following the first link of each article) to philosophy,
             returned route terminates with either:
@@ -214,14 +223,15 @@ def find_philosophy_route(start, history=None):
     >>> print '->'.join(r)
     Computer_science->Science->Knowledge->Fact->Experience
     >>> r = find_philosophy_route(article('http://en.wikipedia.org/wiki/Science'))
-    >>> print '->'.join(r)
-    Science->Knowledge->Fact->Experience
+    >>> print 'Science->Knowledge' in '->'.join(r)
+    True
     """
     history = history or collections.OrderedDict()  # Initialize history if omitted.
     try:
         start = article(start)
     except Exception as ex:
         logging.exception('Failed to create article for : {}, msg: {}, history: {}'.format(start, ex, '->'.join(itertools.imap(str, history))))
+        history[article_url_tail(start)] = ex
         history[ex] = ex
         return history # if failed append exception for cache object, for subsequent requests.
     if start.url_tail in history:  # If start already present in history bail!
@@ -247,75 +257,91 @@ def started_coroutine(callable):  # Automatically starts a coroutine when first 
     return start
 
 @started_coroutine
-def running_average(average=0, counts=None):
+def average(average=0, counts=None):
     """ Simulates a running average, yields current average at every update.
     :param average: starting average, defaults to 0
     :param count: starting count, iterator defaults to itertools.count(), 0->1->2 ...
     :return: coroutine.
-    >>> avg = running_average()
+    >>> avg = average()
     >>> avg.send(1)
     1.0
     >>> avg.send(5)
     3.0
     """
     counts = counts or itertools.count()
-    for seen in counts:
-        average = ((yield average) + (seen * average))/float(seen + 1)
-
-philosophy_routes_count = 0
+    for prev in counts:
+        average = ((yield average) + (prev * average))/float(prev + 1) # <<<< multi by prev to get previous sum.
 
 @started_coroutine
-def average_route_length(seen=None, target='Philosophy', current_avg=None):
-    """ Tracks the running average of the length of the unique routes that end with target.
-        yields current average at every update.
-    :param routes: sequence of routes
-    :param seen: container to keep track of already seen nodes
-    :return: coroutine
-    >>> routes = [xrange(-5, 10), xrange(10), xrange(1), xrange(10)]
-    >>> avg = average_route_length(target=9)
-    >>> print [avg.send(r) for r in routes][-1]
-    11.5
+def percentage(target, percentage=0, count=None): # Similar to running average but instead yield as a percentage ...
+    """ Similar to average, instead it produces the current fractional percentage of taget hits.
+    >>> a = percentage(None)
+    >>> a.send(None)
+    1.0
+    >>> a.send(None)
+    1.0
+    >>> a.send(None)
+    1.0
+    >>> a.send(0)
+    0.75
+    >>> a.send(0)
+    0.6
     """
-    default = object() # use a unique object in case seq is empty, to reduce likely hood of collision
-    seen = set() if seen is None else seen
-    target_reached = lambda seq: next(reversed(seq), default) == target
-    calc_average = current_avg or running_average()
-    avg = None
-    global philosophy_routes_count
-    while True:
-        route = (yield avg)
-        first_node = next(iter(route), default)
-        if first_node is not default and first_node not in seen and target_reached(route): # TODO: deal with modified routes!
-            seen.add(first_node)
-            avg = calc_average.send(len(route) - 1) # exclude starting point.
-            philosophy_routes_count += 1
+    counts = count or itertools.count()
+    for total in counts:
+        percentage = ((percentage * total) + ((yield percentage) == target))/float(total + 1)
 
-current_average = None
-count = 0
+stats = {
+    'count': 0,
+    'philosophy': {'average_length': 0},
+    'distribution': {
+        'philosophy': 0,
+        'cycled': 0,
+        'dead_end': 0,
+        'errors': 0
+    }
+}
 
-def calc_average():
-    global current_average, count  # TODO, use safer method than global variables.
-    chunks = 1
-    routes = itertools.imap(find_philosophy_route, itertools.imap(apply, itertools.repeat(rand_article_path)))
-    chunks = itertools.starmap(itertools.islice, itertools.repeat((routes, None, chunks)))
-    averages = average_route_length()
-    for chunk in chunks:
-        for route in chunk:
-            current_average = averages.send(route)
-            count += 1
 
+def gather_stats(stats=stats):
+    rand_routes = itertools.imap(find_philosophy_route, itertools.imap(apply, itertools.repeat(rand_article_path)))
+    count = stats['count']
+    make_count = functools.partial(itertools.count, count)
+    calc_avg = average(stats['philosophy']['average_length'], make_count())
+    expception_type = type('', (object,), {'__eq__': lambda self, other: isinstance(other, Exception)})()
+    default = object()
+    cycled_type = type('', (object,), {'__eq__': lambda self, other: getattr(route[other], 'first_link', default) in route})()
+    distribution = stats['distribution']
+    percentages = {
+        'philosophy': percentage('Philosophy', distribution['philosophy'], make_count()),
+        'dead_end': percentage(None, distribution['dead_end'], make_count()),
+        'exception': percentage(expception_type, distribution['errors'], make_count()),
+        'cycled': percentage(cycled_type, distribution['cycled'], make_count())
+    }
+    for route in itertools.ifilter(bool, rand_routes):
+        stats['count'] += 1
+        last_node = next(reversed(route))
+        if last_node == 'Philosophy':
+            stats['philosophy']['average_length'] = calc_avg.send(len(route) - 1)
+        for name, func in percentages.iteritems():
+            distribution[name] = func.send(last_node)
 
 @bottle.route('/')
 def get_stats():
-    return {'routes': {'seen': count},
-            'philosophy': {'average_length': current_average, 'count': philosophy_routes_count}}
+    return stats
 
+saved_stats_file = 'analytics.json'
+@atexit.register # <<<< At exit save stats ...
+def save_stats():
+    json.dump(stats, open(saved_stats_file, 'w'))
 
 def start():
-    thread = threading.Thread(target=calc_average)
-    thread.daemon = True
+    thread = threading.Thread(target=gather_stats, args=(stats,))
+    thread.daemon = True # <<< TODO: decide whether or not we should do any house keeping before pulling the plug.
     thread.start()
     bottle.run(host='localhost', port=8080)
 
 if __name__ == '__main__':
+    if os.path.isfile(saved_stats_file):
+        stats = json.load(open(saved_stats_file))
     start()
