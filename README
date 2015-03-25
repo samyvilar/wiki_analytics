@@ -1,7 +1,9 @@
 Wiki Stats
 
 Simple application that tracks statistics on the articles
-traversed from random wiki article to philosophy
+traversed from random wiki article to philosophy,
+on exit the current stats are saved, which are reloaded 
+on restart.
 
 see: @http://en.wikipedia.org/wiki/Wikipedia:Getting_to_Philosophy
 
