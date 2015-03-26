@@ -6,7 +6,6 @@ import argparse
 import functools
 import itertools
 import collections
-import xmllib
 import httplib
 import urlparse
 import Queue
