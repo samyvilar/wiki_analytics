@@ -23,11 +23,38 @@ The server has a single background thread collecting stats.
 usage:
     $ ./wiki_analytics.py --help # print usage
     $ ./wiki_analytics.py # <<<< starts the server and continuously gather stats 
+
     In another shell
     $ curl localhost:8080 # get current stats as a json object.
+    or:
+    $ python -c "import pprint, json, urllib2; pprint.pprint(json.load(urllib2.urlopen('http://localhost:8080')))"
+    {u'count': 145,
+     u'distribution': {u'cycled': 0.0,
+                       u'dead_end': 0.15862068965517243,
+                       u'errors': 0.0,
+                       u'philosophy': 0.8413793103448276},
+     u'last_minute_count': 48,
+     u'philosophy': {u'average_length': 14.29387755102041}}
+    $ [ctrl-c] # save stats, kill server
 
-    $ [ctrl-c] # save stats kill server 
-    $ kill `pgrep -f wiki_analytics.py` 
-    # ^^^^^^^^ UNSAFE!! May raise segfault due to to lxml c code 
-    # and would probably not save stats
+    Do not use kill, its unsafe, possibly raising segfault if lxml is running and would not save the current stats
+    $ kill `pgrep -f wiki_analytics.py`
+
+count: is the total number of routes seen,
+
+distribution:
+    percentage:
+        cycled: routes that cycled
+        dead_end: routes that lead to articles without any links.
+        errors: routes that raised some kind of exception.
+        philosophy: routes that terminated at philosophy.
+
+last_minute_count: is the number of routes processed in the last minute,
+(useful for determining performance, currently avg ~50 routes/min (no caching, single thread))
+
+philosophy: current holds the average number of hops required of all philosophy terminating routes,
+    (1 is the smallest route length.)
+
+
+nosetests --with-doctest wiki_analytics.py # <<<< To run tests (currenly only doctests have being implemented)
 
