@@ -317,15 +317,18 @@ def percentage(start=0.0, counts=None, match=bool):
     for prev in counts:
         start = ((start * prev) + match((yield start)))/(prev + 1.0)
 
+
 stats = {
     'count': 0,
+    'last_minute_count': 0,
     'philosophy': {'average_length': 0.0},
     'distribution': {'philosophy': 0.0, 'cycled': 0.0, 'dead_end': 0.0, 'errors': 0.0}
 }
 
 
 def rand_routes(): # Generates random routes from randomly selected articles ...
-    return itertools.imap(find_philosophy_route, itertools.imap(apply, itertools.repeat(rand_article_path)))
+    for route in itertools.imap(find_philosophy_route, itertools.imap(apply, itertools.repeat(rand_article_path))):
+        yield route
 
 
 shutting_down = threading.Event()
@@ -346,7 +349,11 @@ def gather_stats(stats=stats):
         'errors': percentage(distribution['errors'], make_count(),
                              match=lambda node: isinstance(node, Exception))
     }
+    start, last_minute_count = time.time(), 0
     for route in rand_routes():
+        if time.time() - start > 60:
+            stats['last_minute_count'] = last_minute_count
+            start, last_minute_count = time.time(), 0
         stats['count'] += 1
         last_node = next(reversed(route))
         if last_node == 'Philosophy':
@@ -355,6 +362,8 @@ def gather_stats(stats=stats):
             distribution[name] = func.send(last_node)
         if shutting_down.is_set():
             break
+        last_minute_count += 1
+
 
 
 @bottle.route('/')
