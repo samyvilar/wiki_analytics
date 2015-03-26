@@ -25,6 +25,8 @@ wiki_hostname = 'en.wikipedia.org'
 wiki_port = 80
 wiki_article_path = '/wiki/'
 
+exhaust = collections.deque((), 0).extend # <<<< fastest/cheapest way to exhaust an iterator.
+
 def article_url_tail(url):
     parts = urlparse.urlparse(url)
     if parts.netloc:
@@ -37,14 +39,21 @@ def article_url_tail(url):
 conn_pool_size = 10
 conn_pool = Queue.Queue(conn_pool_size)  # To be used when multi-threading supported is added
 
+def flush_conn_pool():  # <<<< close all the connections and flush the connection pool
+    with conn_pool.mutex:
+        exhaust(conn.close() for conn in conn_pool.queue)
+        conn_pool.queue.clear()
+
+
 def get_or_make_conn(timeout=None, make=functools.partial(httplib.HTTPConnection, wiki_hostname, wiki_port)):
     """ Gets a connection from the current pool or makes one if empty or giving a default timeout.
         @@ NOTE that if the connection object isn't reused withing 5 seconds it will be closed, by the wikipedia server!
     :return: conn object.
+    >>> flush_conn_pool()
     >>> conn = get_or_make_conn()
     >>> conn.request('HEAD', '/wiki/Philosophy')
     >>> resp = conn.getresponse()
-    >>> r = resp.read() # <<<< response must be consumed befored recycling!
+    >>> r = resp.read() # <<<< response must be consumed befored recycling (even if it was empty)!
     >>> recycle_conn(conn)
     >>> conn1 = get_or_make_conn()
     >>> assert conn1 is conn # <<<< reuses previous connection.
@@ -63,19 +72,38 @@ def get_or_make_conn(timeout=None, make=functools.partial(httplib.HTTPConnection
     if timeout is not None:  # If default is giving then we cant used conns from pool
         return make(timeout=timeout)
     try:
-        return conn_pool.get_nowait() # TODO: reset connections or send KEEP-ALIVE conns idling more than 5 seconds ...
-    except Queue.Empty:
+        return conn_pool.get_nowait() # TODO: reset/close/eject connections or send KEEP-ALIVE
+    except Queue.Empty:               #     to conns idling more than 5 seconds ...
         return make()
 
 
-def recycle_conn(conn): # To be used when multi-threading support is added
+def recycle_conn(conn): # recycles a connection, or closes if the pool is already full see: get_or_make_conn.
     try:
         conn_pool.put_nowait(conn)
     except Queue.Full:
         conn.close()
 
-def cached(callable=None, cache=None, key=lambda *args, **kwargs: args and args[0]):
+
+def decorator(decor):
+    """ Wraps a decorator allowing to be used either with or without args, if the callable is None then args
+        are saved otherwise the decorator is applied.
+    :param decor: decorator object.
+    :return: wrapped decorator
+    >>> decor = decorator(lambda callable, amount=10: (lambda: callable(amount)))
+    >>> decor(str)()
+    '10'
+    >>> decor(amount=11)(str)()
+    '11'
+    """
+    @functools.wraps(decor)
+    def grab_config(callable=None, *args, **kwargs):
+        return functools.partial(grab_config, *args, **kwargs) if callable is None else decor(callable, *args, **kwargs)
+    return grab_config
+
+@decorator
+def cached(callable, cache=None, key=lambda *args, **kwargs: args and args[0]):
     cache = cache or {}
+    @functools.wraps(callable)
     def from_cache(*args, **kwargs):
         index = key(*args, **kwargs)
         if isinstance(index, collections.Hashable):  # Try the cache only if index is hashable otherwise bail.
@@ -83,10 +111,45 @@ def cached(callable=None, cache=None, key=lambda *args, **kwargs: args and args[
                 cache[index] = callable(*args, **kwargs)
             return cache[index]
         return callable(*args, **kwargs)
-    return functools.partial(cached, cache=cache, key=key) if callable is None \
-        else functools.wraps(callable)(from_cache) # ^^^^ if decorator with args but missing callable.
+    return from_cache
 
 
+class DaemonicThread(threading.Thread):  # Represents a daemonic thread, [a thread wich shutdowns automatically]
+    def __init__(self, *args, **kwargs):
+        start = kwargs.pop('start', None)
+        super(DaemonicThread, self).__init__(*args, **kwargs)
+        self.daemon = True
+        if start:
+            self.start()
+
+@decorator
+def buffered(callable, size=20, thread_cnt=1):
+    """ creates a threaded buffered from a simple function [used to reduced IO bounds for indefinite streams]
+    :param callable: callable object, cannot accept arguments!
+    :param size: size of the buffered which will be filled by sub threads, once full it blocks/sleeps.
+    :param thread_cnt: number of sub threads to fill the buffer.
+    :return: item getter, removes an item from the buffer, if empty, blocks until item is present.
+    >>> import time
+    >>> get_item = buffered(lambda time=time: time.sleep(.1) or 0, thread_cnt=10)
+    >>> start = time.time()
+    >>> values = [get_item() for i in xrange(10)]
+    >>> end = time.time()
+    >>> assert end - start < .11 # normally this would take 1 minute.
+    >>> assert values == list(itertools.repeat(0, 10))
+    """
+    if not size or not thread_cnt:  # if buffer size is zero or thread_cnt is zero do nothing.
+        return callable
+    buffer = Queue.Queue(size)
+    makeitem = functools.partial(exhaust, itertools.imap(buffer.put, itertools.imap(apply, itertools.repeat(callable))))
+    threads = [DaemonicThread(
+        target=worker,
+        start=True,
+        name='{name}-worker-{id}'.format(name=getattr(callable, '__name__', 'Thread'), id=_id)
+    ) for _id, worker in enumerate(itertools.repeat(makeitem, thread_cnt))]
+    return functools.wraps(callable)(lambda: buffer.get())
+
+
+@buffered
 def rand_article_path(wiki_special_rand_path=wiki_article_path + 'Special:Random'):
     conn = get_or_make_conn()
     conn.request('HEAD', wiki_special_rand_path)
