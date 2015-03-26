@@ -351,6 +351,7 @@ def gather_stats(stats=stats):
     start, last_minute_count = time.time(), 0
     for route in rand_routes():
         if time.time() - start > 60:
+            json.dump(stats, open(saved_stats_file, 'w')) # Save the stats at least every minute, TODO: find a better alternative without gettion IO bounded.
             stats['last_minute_count'] = last_minute_count
             start, last_minute_count = time.time(), 0
         stats['count'] += 1
