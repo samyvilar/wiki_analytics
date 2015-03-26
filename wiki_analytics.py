@@ -387,9 +387,12 @@ stats = {
     'distribution': {'philosophy': 0.0, 'cycled': 0.0, 'dead_end': 0.0, 'errors': 0.0}
 }
 
+@buffered(size=5, thread_cnt=10)
+def rand_route():
+    return find_philosophy_route(rand_article_path())
 
 def rand_routes(): # Generates random routes from randomly selected articles ...
-    for route in itertools.imap(find_philosophy_route, itertools.imap(apply, itertools.repeat(rand_article_path))):
+    for route in itertools.imap(apply, itertools.repeat(rand_route)):
         yield route
 
 
